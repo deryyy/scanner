@@ -8,7 +8,7 @@ import re
 # --- 1. KONFIGURASI HALAMAN ---
 st.set_page_config(
     page_title="Domain Scanner - Yang Mulya Dery",
-    page_icon="??",
+    page_icon="🕵️‍♂️",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -57,6 +57,7 @@ WORDLIST = [
     'dashboard', 'support', 'docs', 'forum', 'store', 'go', 'cloud', 'system'
 ]
 
+@st.cache_data
 def generate_targets(base_domain):
     targets = []
     targets.append({'Tipe': 'Utama', 'Domain': base_domain})
@@ -81,12 +82,13 @@ def generate_targets(base_domain):
             
     return unique_targets
 
-def resolve_dns(target):
+def resolve_dns(target, session):
     hostname = target['Domain']
     tipe = target['Tipe']
     try:
         url = f"https://dns.google/resolve?name={hostname}&type=A"
-        response = requests.get(url, timeout=3)
+        # Menggunakan session yang sama untuk mempercepat koneksi
+        response = session.get(url, timeout=3)
         if response.status_code == 200:
             data = response.json()
             if data.get('Status') == 0 and 'Answer' in data:
@@ -96,14 +98,14 @@ def resolve_dns(target):
                         "Tipe": tipe,
                         "Hostname": hostname,
                         "Alamat IP": ", ".join(ip_records),
-                        "Status": "? Aktif"
+                        "Status": "🟢 Aktif"
                     }
     except Exception:
         pass
     return None
 
 # --- 4. ANTARMUKA PENGGUNA (UI) ---
-st.title("?? Domain Reconnaissance")
+st.title("🕵️‍♂️ Domain Reconnaissance")
 st.markdown("**Terminal Root - Yang Mulya Dery** | Pemindai subdomain tersembunyi & IP.")
 st.markdown("---")
 
@@ -111,7 +113,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     target_domain = st.text_input("Target Domain", placeholder="Masukkan domain (contoh: tesla.com)", label_visibility="collapsed")
 with col2:
-    start_btn = st.button("Mulai Scan ??")
+    start_btn = st.button("Mulai Scan 🚀")
 
 if start_btn:
     clean_domain = re.sub(r'^(https?://)?(www\.)?', '', target_domain.strip().lower()).split('/')[0]
@@ -129,15 +131,24 @@ if start_btn:
         results = []
 
         processed = 0
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {executor.submit(resolve_dns, t): t for t in targets}
+        
+        # Menginisialisasi requests Session untuk koneksi yang lebih cepat
+        session = requests.Session()
+        
+        # Meningkatkan jumlah worker menjadi 50 agar proses paralel jauh lebih cepat
+        with ThreadPoolExecutor(max_workers=50) as executor:
+            # Mengirimkan session ke dalam fungsi resolve_dns
+            futures = {executor.submit(resolve_dns, t, session): t for t in targets}
             for future in concurrent.futures.as_completed(futures):
                 processed += 1
-                target_info = futures[future]
                 
+                # Update progress bar
                 progress = int((processed / total) * 100)
                 progress_bar.progress(progress)
-                status_text.text(f"Mengecek [{processed}/{total}]: {target_info['Domain']}")
+                
+                # Membatasi update teks UI agar Streamlit tidak lag (update tiap 5 item atau di akhir)
+                if processed % 5 == 0 or processed == total:
+                    status_text.text(f"Mengecek [{processed}/{total}]...")
                 
                 res = future.result()
                 if res:
@@ -145,7 +156,7 @@ if start_btn:
         
         status_text.text("Pemindaian selesai!")
         
-        st.markdown("### ?? Hasil Pemindaian")
+        st.markdown("### 🟢 Hasil Pemindaian")
         if results:
             st.success(f"Ditemukan {len(results)} domain aktif!")
             df = pd.DataFrame(results)
