@@ -1,5 +1,5 @@
 import streamlit as st
-import requests
+import socket
 import pandas as pd
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
@@ -82,24 +82,22 @@ def generate_targets(base_domain):
             
     return unique_targets
 
-def resolve_dns(target, session):
+def resolve_dns_native(target):
     hostname = target['Domain']
     tipe = target['Tipe']
     try:
-        url = f"https://dns.google/resolve?name={hostname}&type=A"
-        # Menggunakan session yang sama untuk mempercepat koneksi
-        response = session.get(url, timeout=3)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('Status') == 0 and 'Answer' in data:
-                ip_records = [ans['data'] for ans in data['Answer'] if ans['type'] == 1]
-                if ip_records:
-                    return {
-                        "Tipe": tipe,
-                        "Hostname": hostname,
-                        "Alamat IP": ", ".join(ip_records),
-                        "Status": "🟢 Aktif"
-                    }
+        # Menggunakan native OS socket UDP (Sangat Cepat, tidak butuh HTTP/Google API)
+        _, _, ip_records = socket.gethostbyname_ex(hostname)
+        if ip_records:
+            return {
+                "Tipe": tipe,
+                "Hostname": hostname,
+                "Alamat IP": ", ".join(ip_records),
+                "Status": "🟢 Aktif"
+            }
+    except socket.gaierror:
+        # Domain tidak ditemukan / tidak resolve
+        pass
     except Exception:
         pass
     return None
@@ -132,22 +130,16 @@ if start_btn:
 
         processed = 0
         
-        # Menginisialisasi requests Session untuk koneksi yang lebih cepat
-        session = requests.Session()
-        
-        # Meningkatkan jumlah worker menjadi 50 agar proses paralel jauh lebih cepat
-        with ThreadPoolExecutor(max_workers=50) as executor:
-            # Mengirimkan session ke dalam fungsi resolve_dns
-            futures = {executor.submit(resolve_dns, t, session): t for t in targets}
+        # Max workers dinaikkan jadi 100 karena I/O Socket UDP sangat ringan
+        with ThreadPoolExecutor(max_workers=100) as executor:
+            futures = {executor.submit(resolve_dns_native, t): t for t in targets}
             for future in concurrent.futures.as_completed(futures):
                 processed += 1
                 
-                # Update progress bar
-                progress = int((processed / total) * 100)
-                progress_bar.progress(progress)
-                
-                # Membatasi update teks UI agar Streamlit tidak lag (update tiap 5 item atau di akhir)
-                if processed % 5 == 0 or processed == total:
+                # Mengurangi beban render UI (Hanya update layar setiap 15 target yang diproses)
+                if processed % 15 == 0 or processed == total:
+                    progress = int((processed / total) * 100)
+                    progress_bar.progress(progress)
                     status_text.text(f"Mengecek [{processed}/{total}]...")
                 
                 res = future.result()
